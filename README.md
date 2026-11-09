@@ -6,6 +6,8 @@ The viewer supports folding, expand/collapse all, search, pan, zoom, fit, links 
 
 ## Use the macOS app
 
+You need macOS and an installed Freeplane application; Freeplane 1.13.4 is the tested version. Save your map in Freeplane before exporting: the companion reads the saved file, including its saved fold state, rather than unsaved changes in an open window. Java comes from Freeplane. Python is needed only if you build the companion yourself.
+
 1. Obtain `dist/freeplane-interactive-html-macos.zip` from a local build. No public download is available yet. Unzip it and move `Freeplane Interactive HTML.app` to `~/Applications` if desired.
 2. Open the app, choose one saved `.mm` file (or drop one onto the app), then choose where to save the `.html` file. On success, the app opens the HTML output in the default browser.
 3. The app uses Java from an installed Freeplane application. It searches common Applications folders and prompts you to choose Freeplane if needed. The CLI's optional `FREEPLANE_HOME` setting points to the installed app's `Contents/app` directory. A graphical Freeplane runtime is required. During capture, Freeplane may briefly appear. Headless `-N` mode is not used.
@@ -24,6 +26,30 @@ The viewer supports folding, expand/collapse all, search, pan, zoom, fit, links 
 
 The published alpha.2 startup add-on and manual ZIP are historical experimental packages. They are not recommended for new installations: the add-on depended on startup-script permissions and failed its default-restrictions check. The companion supersedes that approach.
 
+## Build and try the preview
+
+While [PR #2](https://github.com/shlomi-dr/freeplane-interactive-html/pull/2) is open, build its branch on a Mac with Git and Python 3 installed:
+
+```sh
+git clone --branch shlomi/1-interactive-html-export https://github.com/shlomi-dr/freeplane-interactive-html.git
+cd freeplane-interactive-html
+python3 scripts/package.py
+open dist
+```
+
+1. Unzip `freeplane-interactive-html-macos.zip`. Keep the extracted `examples` folder for the first test.
+2. Open `Freeplane Interactive HTML.app`, choose `examples/Clockwork Garden Festival.mm`, and save the result as `Clockwork Garden Festival.html` in a writable folder. You can also drop that one `.mm` file onto the app.
+3. Wait for the export. A separate Freeplane window may appear during capture. A successful export opens in your default browser. The default time limit is three minutes.
+4. Try the controls below, then repeat with one of your own saved maps. Choosing an existing HTML destination replaces it only after the export completes successfully.
+5. Share the resulting `.html` file with recipients. They can open the viewer in a browser without installing Freeplane. External links and linked resources may still require access to their original locations.
+
+## Use the HTML viewer
+
+1. Click a node's small **+ / −** button to expand or collapse that branch. The toolbar's **Collapse all / Expand all** button switches between the two actions; hover over its icon to see the current action.
+2. Drag the map to pan. Use the mouse wheel, trackpad scroll, or toolbar **+ / −** buttons to zoom. Choose **Fit** to bring the visible map into view.
+3. Type into **Search nodes…** to search node text and captured details, including folded branches. The viewer reveals the path to a match. Press **Enter** or the toolbar arrow to move to the next match; clear the search field to remove highlights.
+4. Click a node's link to open its destination. Collapse/expand and search affect the browser view; they do not edit the original `.mm` file or save a changed mind map.
+
 ## Command-line export
 
 The local CLI package is `dist/freeplane-interactive-html-companion.zip`. Its entry point accepts an input map and output HTML path:
@@ -32,9 +58,31 @@ The local CLI package is `dist/freeplane-interactive-html-companion.zip`. Its en
 bin/export-map.sh INPUT.mm OUTPUT.html
 ```
 
+For example, from the extracted CLI package or repository:
+
+```sh
+./bin/export-map.sh "examples/Clockwork Garden Festival.mm" "$PWD/festival.html"
+open festival.html
+```
+
+The CLI prints the output path on success; it does not open the browser itself. The output directory must already exist. Quote paths containing spaces. To choose a nonstandard Freeplane installation:
+
+```sh
+FREEPLANE_HOME="$HOME/Applications/Freeplane.app/Contents/app" \
+  ./bin/export-map.sh "/path/to/map.mm" "/path/to/map.html"
+```
+
 `FREEPLANE_HOME` is optional when an installed Freeplane app can be discovered; otherwise set it to the installed distribution's `Contents/app` directory. The exporter runs in an isolated CLI process with a unique Freeplane profile, the trusted bundled export script, and `-S`. It needs the graphical runtime and does not use headless `-N`. It does not modify the installed app or the user's normal profile.
 
 Python and Node are not required for end users. Building the macOS app requires Python 3 and the macOS `osacompile`, `ditto`, and `codesign` tools. The local preview packages have passed build and integrity checks; they are not yet a published release.
+
+## Troubleshooting
+
+1. **Freeplane not found:** choose the installed `Freeplane.app` when prompted by the companion. For the CLI, set `FREEPLANE_HOME` as above. The companion itself is not the Freeplane application.
+2. **Export failed:** the error includes the location of a retained Freeplane log. An unsupported feature, such as a straight cross-link, can cause capture to fail. Try the fictional example to distinguish an installation problem from a map-specific problem. An existing destination is preserved on failure.
+3. **Export timed out:** the companion stops its export process after three minutes and retains a diagnostic log. For a larger map, use the CLI with `FREEPLANE_EXPORT_TIMEOUT=600` before the command to allow ten minutes.
+4. **HTML did not open automatically:** open the selected `.html` file manually in a browser. If no file was produced, check the export error and log.
+5. **Unexpected appearance or literal formulas:** review the compatibility notes below. The companion uses a fresh profile and does not evaluate formulas.
 
 ## Compatibility and limitations
 
