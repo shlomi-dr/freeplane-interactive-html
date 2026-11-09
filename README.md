@@ -1,28 +1,15 @@
-# Freeplane Interactive HTML
+# Freeplane Interactive HTML Companion
 
-Experimental whole-map HTML export for **Freeplane 1.13.3**. The exporter runs inside Freeplane and adds **File > Export > Interactive HTML (*.html)**. It captures native node artwork into SVG and embeds it with map metadata in an interactive HTML viewer.
+Freeplane Interactive HTML is an experimental companion that exports one saved Freeplane map (`.mm`) to a standalone HTML viewer. It does not install an add-on, change Freeplane, or change your existing Freeplane profile. The first delivery is a local macOS app, version `0.2.0-alpha.1`; it has not been published. A command-line ZIP is also built locally.
 
-1. The viewer supports folding, expand/collapse all, search, pan, zoom, and fit. It supports both map sides, single-level summary groups, and cubic crosslinks whose native control handles are translated with their endpoints. Node artwork comes from Freeplane; browser layout and branch/summary routing are custom and do not reproduce the full native map layout.
-2. Compatibility is experimental and limited to Freeplane 1.13.3. Native renderer reflection and internal APIs can change. Runtime smoke validation passed on Freeplane 1.13.3 with JDK 21.0.11 on macOS 26.2, including native export dispatch and state restoration after success and forced failure. Nested summaries, other connector shapes, broader map features, large-map performance, and other Freeplane versions require further validation. Unsupported capture cases may fail rather than produce output.
-3. The runtime consists of the two Groovy files and HTML template in `src/`. Export needs the installed Freeplane application and Java 21; Java 21 is the tested configuration. Python, Node, probe launchers, and compiled test classes are developer tools only. Browser compatibility, external linked content, and direct `file://` loading have not been established as a general offline runtime guarantee.
+The viewer supports folding, expand/collapse all, search, pan, zoom, fit, links on both sides, single-level summary groups, and cubic crosslinks. Straight crosslinks are not supported. The browser layout and summary routing are custom and do not reproduce Freeplane's exact layout. Nested summaries are unsupported.
 
-![Clockwork Garden Festival export preview](examples/preview.jpg)
+## Use the macOS app
 
-## Install the experimental add-on
-
-1. Download [freeplane-interactive-html.addon.mm](https://github.com/shlomi-dr/freeplane-interactive-html/releases/download/v0.1.0-alpha.2/freeplane-interactive-html.addon.mm). This release targets **Freeplane 1.13.3**.
-2. In Freeplane, choose **Tools > Add-ons > Search and install**, select the downloaded file, and choose **Install**. Review and accept the installation and license prompts.
-3. Restart Freeplane and approve the startup script if prompted. Open a map, then choose **File > Export > Interactive HTML (*.html)**.
-4. To upgrade, install the newer `.addon.mm` file through the same dialog and restart. If you installed the earlier manual ZIP, the add-on uses the same six file paths; preserve any local edits before installing over them.
-5. To remove the add-on, select it in **Tools > Add-ons** and choose **Uninstall**, then restart Freeplane. The exporter remains registered in the running session until restart.
-
-No terminal commands, Python, or Node are needed to install or use the add-on.
-
-## Manual ZIP fallback
-
-1. Download the [experimental ZIP](https://github.com/shlomi-dr/freeplane-interactive-html/releases/download/v0.1.0-alpha.2/freeplane-interactive-html-manual.zip), or build it using the command below. This fallback installs files manually and does not register them with Freeplane's add-on manager. If you used the native add-on installer, use its managed uninstall instead.
-2. In Freeplane, choose **Tools > Open user directory**. Keep that directory open, then quit Freeplane. If one of the following paths already exists, preserve it before replacing files.
-3. Extract the ZIP **into that user directory**, with these relative paths:
+1. Obtain `dist/freeplane-interactive-html-macos.zip` from a local build. No public download is available yet. Unzip it and move `Freeplane Interactive HTML.app` to `~/Applications` if desired.
+2. Open the app, choose one saved `.mm` file (or drop one onto the app), then choose where to save the `.html` file. On success, the app opens the HTML output in the default browser.
+3. The app uses Java from an installed Freeplane application. It searches common Applications folders and prompts you to choose Freeplane if needed. The CLI's optional `FREEPLANE_HOME` setting points to the installed app's `Contents/app` directory. A graphical Freeplane runtime is required. During capture, Freeplane may briefly appear. Headless `-N` mode is not used.
+4. To uninstall, quit the companion and remove its `.app`. It creates no profile artifacts. If you previously installed the experimental startup add-on, uninstall that separately through Freeplane's Add-ons manager and restart. For a manual legacy installation, quit Freeplane and remove only these files from its user directory, preserving unrelated files:
 
    ```text
    scripts/init/interactive-html.groovy
@@ -33,46 +20,35 @@ No terminal commands, Python, or Node are needed to install or use the add-on.
    addons/interactive-html/NOTICE
    ```
 
-4. Restart Freeplane and approve the startup script if Freeplane prompts for permission. Open a map, then choose **File > Export > Interactive HTML (*.html)** and save to a new destination. This action exports the whole map regardless of the selected node. Test with the fictional example first. Runtime checks verified restoration of map/view state after successful and failed capture, and preservation of an existing destination after failed capture.
-5. To remove this manual installation, quit Freeplane and remove exactly these files from the same user directory:
+   The companion does not remove an older add-on.
 
-   ```text
-   scripts/init/interactive-html.groovy
-   addons/interactive-html/resources/InteractiveHtmlAddon.groovy
-   addons/interactive-html/resources/viewer-template.html
-   addons/interactive-html/README.md
-   addons/interactive-html/LICENSE
-   addons/interactive-html/NOTICE
-   ```
+The published alpha.2 startup add-on and manual ZIP are historical experimental packages. They are not recommended for new installations: the add-on depended on startup-script permissions and failed its default-restrictions check. The companion supersedes that approach.
 
-   Remove the now-empty `addons/interactive-html/resources` and `addons/interactive-html` directories if desired, then restart Freeplane. Keep other startup scripts and add-ons.
+## Command-line export
 
-## Examples and development
+The local CLI package is `dist/freeplane-interactive-html-companion.zip`. Its entry point accepts an input map and output HTML path:
 
-1. `examples/Clockwork Garden Festival.mm` contains fictional festival planning content and reserved `example.com` links. `examples/Clockwork Garden Festival.html` was exported from the unmodified fixture by the current in-process engine. Browser interaction checks passed for this fresh output over local HTTP; see [validation status](docs/VALIDATION.md).
-2. Build the native add-on and manual ZIP with Python 3's standard library:
+```sh
+bin/export-map.sh INPUT.mm OUTPUT.html
+```
 
-   ```sh
-   python3 scripts/package.py
-   ```
+`FREEPLANE_HOME` is optional when an installed Freeplane app can be discovered; otherwise set it to the installed distribution's `Contents/app` directory. The exporter runs in an isolated CLI process with a unique Freeplane profile, the trusted bundled export script, and `-S`. It needs the graphical runtime and does not use headless `-N`. It does not modify the installed app or the user's normal profile.
 
-   The results are `dist/freeplane-interactive-html.addon.mm` and `dist/freeplane-interactive-html-manual.zip`. The build uses an explicit file allowlist, fixed ZIP timestamps and permissions, sorted entries, and stored bytes for reproducibility. It never installs files into a Freeplane profile. Python is a developer build dependency only.
-3. Check Python syntax without generating compiled files:
+Python and Node are not required for end users. Building the macOS app requires Python 3 and the macOS `osacompile`, `ditto`, and `codesign` tools. The local preview packages have passed build and integrity checks; they are not yet a published release.
 
-   ```sh
-   python3 -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/package.py').read_text())"
-   ```
+## Compatibility and limitations
 
-   There is no configured project lint tool. The packaging script checks archive integrity and layout after writing.
-4. Run the portable smoke test from a graphical desktop with an installed Freeplane distribution and JDK 21. Set `FREEPLANE_HOME` to the directory containing `freeplanelauncher.jar` and `JAVA_HOME` to the JDK directory:
+1. The companion runner and the runner bundled inside the macOS app passed runtime checks with Freeplane 1.13.4 and its bundled Java 21.0.11 on macOS 26.2. Finder choose/drop dialogs and automatic browser opening still need a manual check. Freeplane 1.13.3 compatibility for the companion, Linux, and Windows are unverified.
+2. The viewer offers interactive map navigation, but its layout and branch/summary routing are custom. Exact Freeplane layout, nested summaries, and all map feature combinations are not supported or established.
+3. Export operates on a saved `.mm` file and one map per invocation. A graphical Freeplane runtime is required, and Freeplane can briefly show during capture.
+4. Formula evaluation is disabled in the temporary export profile. Formula nodes are exported as literal expressions rather than calculated values. The companion is not a general sandbox for untrusted map files.
+5. The preview app is ad-hoc signed for bundle integrity, not Developer ID signed or notarized. macOS may require an explicit Open confirmation for a downloaded copy.
+6. The temporary profile does not inherit your per-user preferences or add-ons. Maps that depend on those settings or external resources may render differently.
 
-   ```sh
-   export FREEPLANE_HOME=/path/to/freeplane/distribution
-   export JAVA_HOME=/path/to/jdk-21
-   scripts/smoke-test.sh
-   scripts/smoke-test.sh --demo
-   ```
+See [validation status](docs/VALIDATION.md) for the tested behavior and remaining checks. The fictional [example map](examples/Clockwork%20Garden%20Festival.mm) and [preview](examples/preview.jpg) are included for reference; the checked-in HTML was generated by the earlier in-process prototype.
 
-   Both commands compile against that installation and run Freeplane in a disposable profile. The smoke test exercises export and restoration; `--demo` exports the unmodified example to `baseline.html` in the reported artifact directory. Logs and artifacts remain there for inspection. The profile automatically approves known test scripts using `execute_scripts_without_asking=true`; this is limited to the disposable test profile. The launcher's security-manager bootstrap setting is test-only: Freeplane installs its own manager. Neither setting is an installation instruction or a requirement for exporting from an ordinary profile. Keep normal file/network restrictions. See [validation status](docs/VALIDATION.md) for coverage and limitations.
-5. Run `scripts/install-test.sh` with the same environment variables to check native installation in disposable profiles. See [validation status](docs/VALIDATION.md) for the tested lifecycle and remaining limits.
-6. Authored project content is licensed under **GPL-2.0-only**. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Freeplane and Batik are supplied by the installed application and are not bundled here.
+## Development
+
+1. Build the CLI ZIP and macOS app ZIP with `python3 scripts/package.py` on macOS. The generated files belong under `dist/`.
+2. Run `python3 tests/companion-integration.py` for the mock-launcher checks, or add `--runtime` to also launch the installed Freeplane and test real exports in temporary profiles. Set `FREEPLANE_HOME` to select another installation. The older `scripts/smoke-test.sh` and `scripts/install-test.sh` belong to the superseded startup add-on; use the companion integration suite for this version.
+3. Authored project content is licensed under **GPL-2.0-only**. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Freeplane and its runtime dependencies are supplied by the user's installed application and are not bundled here.

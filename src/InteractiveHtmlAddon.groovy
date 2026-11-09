@@ -17,17 +17,18 @@ import javax.swing.JViewport
 import javax.swing.filechooser.FileFilter
 import org.freeplane.core.ui.CaseSensitiveFileNameExtensionFilter
 
-// Experimental Freeplane 1.13.3 compatibility seam: native Batik and renderer reflection.
+// Experimental Freeplane 1.13.3–1.13.4 compatibility seam: native Batik and renderer reflection.
 class InteractiveHtmlExporter implements IExportEngine {
  static final String FILTER_DESCRIPTION = 'Interactive HTML (*.html)'
  final String template
  final ClassLoader scriptingClassLoader
  boolean forceFailureForTest = false
- InteractiveHtmlExporter(File templateFile) {
-  template = templateFile.getText('UTF-8')
+ InteractiveHtmlExporter(String templateText) {
+  template = templateText
   scriptingClassLoader = Thread.currentThread().contextClassLoader
  }
- static FileFilter register(File templateFile) {
+ InteractiveHtmlExporter(File templateFile) { this(templateFile.getText('UTF-8')) }
+ static FileFilter registerTemplate(String templateText) {
   if (!SwingUtilities.isEventDispatchThread()) throw new IllegalStateException('Register on EDT')
   def controller = ExportController.getController(Controller.currentModeController)
   if (!controller) throw new IllegalStateException('Mind-map export controller is not ready')
@@ -35,8 +36,11 @@ class InteractiveHtmlExporter implements IExportEngine {
   if (existing) return existing
   def filter = new CaseSensitiveFileNameExtensionFilter('html', FILTER_DESCRIPTION)
   filter.setExtensionListInDescription(false)
-  controller.addMapExportEngine(filter, new InteractiveHtmlExporter(templateFile))
+  controller.addMapExportEngine(filter, new InteractiveHtmlExporter(templateText))
   filter
+ }
+ static FileFilter register(File templateFile) {
+  registerTemplate(templateFile.getText('UTF-8'))
  }
  static def field(Object object, String name) {
   Class type = object.class
