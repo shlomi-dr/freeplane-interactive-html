@@ -1,0 +1,3 @@
+# Preserve the upstream license and the native XML fixture verbatim.
+LICENSE -whitespace
+examples/*.mm -whitespace

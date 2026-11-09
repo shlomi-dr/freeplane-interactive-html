@@ -1,0 +1,18 @@
+Freeplane Interactive HTML
+
+Authored exporter, viewer, packaging code, documentation, and fictional example
+content in this project are licensed under GPL-2.0-only. See LICENSE for the
+GNU General Public License version 2. The LICENSE text is reproduced verbatim
+from the installed Freeplane distribution's license.txt.
+
+The exporter uses Freeplane's native APIs, native renderer, and Batik classes
+provided by the user's installed Freeplane application. Freeplane, Batik,
+Groovy, Java, and their dependency binaries are not vendored in this project
+or its installer ZIP. Their respective copyright and license notices remain
+with those distributions.
+
+Clockwork Garden Festival is authored fictional demonstration content with
+reserved example.com links. The checked-in HTML was generated from the
+unmodified .mm fixture by this project's in-process exporter using Freeplane
+1.13.3 with JDK 21.0.11 on macOS 26.2. See docs/VALIDATION.md for validation
+coverage and remaining limitations.
