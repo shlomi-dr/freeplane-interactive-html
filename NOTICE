@@ -1,9 +1,11 @@
 Freeplane Interactive HTML Companion
 
 Authored exporter, viewer, companion scripts, packaging code, documentation, and
-fictional example content in this project are licensed under GPL-2.0-only. See
-LICENSE for the GNU General Public License version 2. The LICENSE text is
-reproduced verbatim from the installed Freeplane distribution's license.txt.
+fictional example content in this project are licensed under the GNU General
+Public License, version 2 or (at your option) any later version
+(SPDX-License-Identifier: GPL-2.0-or-later). See LICENSE for the project grant
+followed by the GNU General Public License version 2 text, reproduced verbatim
+from the installed Freeplane distribution's license.txt.
 
 The companion uses the user's installed Freeplane application and its Java,
 Groovy, and other runtime dependencies. Freeplane, Batik, Groovy, Java, and
