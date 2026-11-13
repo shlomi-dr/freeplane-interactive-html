@@ -8,6 +8,7 @@ import org.freeplane.features.export.mindmapmode.IExportEngine
 import org.freeplane.core.util.HtmlUtils
 import groovy.json.JsonOutput
 import java.awt.Dimension
+import java.awt.Font
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.nio.file.Files
@@ -18,6 +19,9 @@ import javax.swing.filechooser.FileFilter
 import org.freeplane.core.ui.CaseSensitiveFileNameExtensionFilter
 
 // Experimental Freeplane 1.13.3–1.13.4 compatibility seam: native Batik and renderer reflection.
+// Node artwork is drawn with Freeplane's own vector-export graphics class
+// (ExportVectorGraphic.SVGExportGraphics2D), so labels become true SVG <text>
+// exactly as in org.freeplane.plugin.svg.ExportSvg instead of glyph outlines.
 class InteractiveHtmlExporter implements IExportEngine {
  static final String FILTER_DESCRIPTION = 'Interactive HTML (*.html)'
  final String template
@@ -129,148 +133,170 @@ class InteractiveHtmlExporter implements IExportEngine {
   } finally { Files.deleteIfExists(temporary) }
  }
  String capture(def mapView, List<NodeModel> nodes, MapModel map) {
-def bundle = org.osgi.framework.FrameworkUtil.getBundle(Controller).bundleContext.bundles.find { it.symbolicName == 'org.freeplane.plugin.svg' }
-assert bundle != null
-def domImplClass = bundle.loadClass('org.apache.batik.dom.GenericDOMImplementation')
-def contextClass = bundle.loadClass('org.apache.batik.svggen.SVGGeneratorContext')
-def graphicsClass = bundle.loadClass('org.apache.batik.svggen.SVGGraphics2D')
-def gradientHandlerClass = bundle.loadClass('org.freeplane.plugin.svg.GradientExtensionHandler')
-def makeSVG = { int width, int height ->
- def dom = domImplClass.getDOMImplementation().createDocument('http://www.w3.org/2000/svg', 'svg', null)
- def context = contextClass.createDefault(dom)
- // Match Freeplane's vector exporter for native icon gradient paints.
- context.setExtensionHandler(gradientHandlerClass.getConstructor().newInstance())
- def g = graphicsClass.getConstructor(contextClass, Boolean.TYPE).newInstance(context, true)
- g.setSVGCanvasSize(new Dimension(width, height))
- g.setClip(0, 0, width, height)
- g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
- g
-}
-def records = []
-def connectorRecords = []
-mapView.preparePrinting()
-try {
- def paintingModeField = mapView.class.getDeclaredField('paintingMode')
- paintingModeField.setAccessible(true)
- def originalPaintingMode = paintingModeField.get(mapView)
- def modes = paintingModeField.type.enumConstants
- try {
-  nodes.each { n ->
-   def view = mapView.getNodeView(n)
-   assert view != null : "No native view for ${n.ID}, folded=${n.folded}"
-   def content = view.getContent()
-   def main = view.mainView
-   assert content.width >= 0 && content.height >= 0 : "Unlaid node ${n.ID}"
-   if (plain(n)) assert content.width > 0 && content.height > 0 : "Unlaid nonempty node ${n.ID}"
-   int width = content.width + 6, height = content.height + 6
-   paintingModeField.set(mapView, modes.find { it.name() == (view.isSelected() ? 'SELECTED_NODES' : 'NODES') })
-   def paintContent = { g ->
-    g.translate(3, 3)
-    g.setFont(main.font)
-    g.setColor(main.foreground)
-    content.paint(g)
-   }
-   def g = makeSVG(width, height)
-   paintContent(g)
-   def writer = new StringWriter()
-   g.stream(writer, true)
-   g.dispose()
-   if (forceFailureForTest) throw new IllegalStateException('Forced capture failure for restoration test')
-   records << [id:n.ID, parentId:n.parentNode?.ID, label:plain(n), width:width, height:height, artwork:writer.toString(), topOrLeft:view.isTopOrLeft()]
+  def bundle = org.osgi.framework.FrameworkUtil.getBundle(Controller).bundleContext.bundles.find { it.symbolicName == 'org.freeplane.plugin.svg' }
+  assert bundle != null
+  def domImplClass = bundle.loadClass('org.apache.batik.dom.GenericDOMImplementation')
+  def contextClass = bundle.loadClass('org.apache.batik.svggen.SVGGeneratorContext')
+  def graphicsClass = bundle.loadClass('org.apache.batik.svggen.SVGGraphics2D')
+  def gradientHandlerClass = bundle.loadClass('org.freeplane.plugin.svg.GradientExtensionHandler')
+// ExportSvg draws through ExportVectorGraphic.SVGExportGraphics2D, a private subclass of
+// Batik's SVGGraphics2D constructed with textAsShapes=false so that Graphics.drawString
+// becomes real SVG <text>. Its drawString overrides honor
+// org.freeplane.core.awt.GraphicsHints.FORCE_TEXT_TO_SHAPE (set around LaTeX icons) and its
+// create() keeps derived graphics in the same class. Reuse that very class here.
+  def textGraphicsConstructor
+  try {
+   def exportGraphicsClass = bundle.loadClass('org.freeplane.plugin.svg.ExportVectorGraphic$SVGExportGraphics2D')
+   textGraphicsConstructor = exportGraphicsClass.getDeclaredConstructor(contextClass, Boolean.TYPE)
+   textGraphicsConstructor.accessible = true
+  } catch (ReflectiveOperationException | java.lang.reflect.InaccessibleObjectException futureIncompatibility) {
+   // Fallback for refactored Freeplane versions: plain Batik graphics, still with true text,
+   // losing only the FORCE_TEXT_TO_SHAPE handling of special content such as LaTeX.
+   textGraphicsConstructor = graphicsClass.getConstructor(contextClass, Boolean.TYPE)
   }
- } finally { paintingModeField.set(mapView, originalPaintingMode) }
- // Resolve styles through the live controller and geometry through its native renderer.
- def linkController = org.freeplane.features.link.LinkController.getController()
- def fieldValue = { obj, name ->
-  def field = obj.class.getDeclaredField(name); field.accessible = true; field.get(obj)
- }
- def pointData = { p -> p == null ? null : [x:p.x, y:p.y] }
- nodes.each { n ->
-  org.freeplane.features.link.NodeLinks.getLinks(n).findAll { it instanceof org.freeplane.features.link.ConnectorModel }.each { connector ->
-   def source = mapView.getNodeView(connector.source)
-   def target = mapView.getNodeView(connector.target)
-   assert source && target
-   // Sample the native complete line irrespective of selection-only UI visibility.
-   // This is a temporary view field; restore it before any further capture.
-   def visibilityField = mapView.class.getDeclaredField('showConnectors'); visibilityField.accessible = true
-   def visibilityConstant = mapView.class.getDeclaredField('SHOW_CONNECTOR_LINES'); visibilityConstant.accessible = true
-   def originalVisibility = visibilityField.get(mapView)
-   def nativeView
+  def makeSVG = { int width, int height ->
+   def dom = domImplClass.getDOMImplementation().createDocument('http://www.w3.org/2000/svg', 'svg', null)
+   def context = contextClass.createDefault(dom)
+   // Match Freeplane's vector exporter for native icon gradient paints.
+   context.setExtensionHandler(gradientHandlerClass.getConstructor().newInstance())
+   // Match ExportVectorGraphic.createSVGGraphics2D: default graphics font and full coordinate
+   // precision, so <text> positions match the single-SVG exporter.
+   def defaults = contextClass.getDeclaredClasses().find { it.simpleName == 'GraphicContextDefaults' }.getDeclaredConstructor().newInstance()
+   defaults.setFont(new Font('Arial', Font.PLAIN, 12))
+   context.setGraphicContextDefaults(defaults)
+   context.setPrecision(12)
+   // textAsShapes=false, as in ExportSvg: label text drawn via drawString is emitted as <text>.
+   def g = textGraphicsConstructor.newInstance(context, false)
+   g.setSVGCanvasSize(new Dimension(width, height))
+   g.setClip(0, 0, width, height)
+   g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+   g
+  }
+  def records = []
+  def connectorRecords = []
+  mapView.preparePrinting()
+  try {
+   def paintingModeField = mapView.class.getDeclaredField('paintingMode')
+   paintingModeField.setAccessible(true)
+   def originalPaintingMode = paintingModeField.get(mapView)
+   def modes = paintingModeField.type.enumConstants
    try {
-    visibilityField.set(mapView, visibilityConstant.get(null))
-    nativeView = new org.freeplane.view.swing.map.link.ConnectorView(connector, source, target, mapView.background)
-   } finally { visibilityField.set(mapView, originalVisibility) }
-   def image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
-   def graphics = image.createGraphics()
-   nativeView.paint(graphics)
-   graphics.dispose()
-   def curve = fieldValue(nativeView, 'arrowLinkCurve')
-   assert curve instanceof java.awt.geom.CubicCurve2D : "Unsupported captured connector shape: ${curve?.class}"
-   def origin = { view -> SwingUtilities.convertPoint(view.content, 0, 0, mapView) }
-   def sourceOrigin = origin(source), targetOrigin = origin(target)
-   // Node artwork includes three pixels of capture padding around content.
-   def sourceAnchor = [x:curve.x1-sourceOrigin.x+3, y:curve.y1-sourceOrigin.y+3]
-   def targetAnchor = [x:curve.x2-targetOrigin.x+3, y:curve.y2-targetOrigin.y+3]
-   def arrows = linkController.getArrows(connector)
-   def arrowEnds = []
-   if (arrows.start.name() != 'NONE') arrowEnds << 'source'
-   if (arrows.end.name() != 'NONE') arrowEnds << 'target'
-   def polygons = fieldValue(nativeView, 'arrows')
-   assert polygons.size() == arrowEnds.size()
-   def arrowGeometry = polygons.withIndex().collect { polygon, index ->
-    def end = arrowEnds[index]
-    double ax = end == 'source' ? curve.x1 : curve.x2
-    double ay = end == 'source' ? curve.y1 : curve.y2
-    [end:end, points:(0..<polygon.npoints).collect { i -> [x:polygon.xpoints[i]-ax, y:polygon.ypoints[i]-ay] }]
+    nodes.each { n ->
+     def view = mapView.getNodeView(n)
+     assert view != null : "No native view for ${n.ID}, folded=${n.folded}"
+     def content = view.getContent()
+     def main = view.mainView
+     assert content.width >= 0 && content.height >= 0 : "Unlaid node ${n.ID}"
+     if (plain(n)) assert content.width > 0 && content.height > 0 : "Unlaid nonempty node ${n.ID}"
+     int width = content.width + 6, height = content.height + 6
+     paintingModeField.set(mapView, modes.find { it.name() == (view.isSelected() ? 'SELECTED_NODES' : 'NODES') })
+     def paintContent = { g ->
+      g.translate(3, 3)
+      g.setFont(main.font)
+      g.setColor(main.foreground)
+      content.paint(g)
+     }
+     def g = makeSVG(width, height)
+     paintContent(g)
+     def writer = new StringWriter()
+     g.stream(writer, true)
+     g.dispose()
+     if (forceFailureForTest) throw new IllegalStateException('Forced capture failure for restoration test')
+     records << [id:n.ID, parentId:n.parentNode?.ID, label:plain(n), width:width, height:height, artwork:writer.toString(), topOrLeft:view.isTopOrLeft()]
+    }
+   } finally { paintingModeField.set(mapView, originalPaintingMode) }
+   // Resolve styles through the live controller and geometry through its native renderer.
+   def linkController = org.freeplane.features.link.LinkController.getController()
+   def fieldValue = { obj, name ->
+    def field = obj.class.getDeclaredField(name); field.accessible = true; field.get(obj)
    }
-   def color = linkController.getColor(connector)
-   def stroke = fieldValue(nativeView, 'stroke')
-   connectorRecords << [sourceId:connector.source.ID, targetId:connector.targetID,
-    resolved:[color:String.format('#%02x%02x%02x', color.red, color.green, color.blue),
-     width:linkController.getWidth(connector), alpha:linkController.getOpacity(connector),
-     dash:(linkController.getDashArray(connector) ?: []).toList(), shape:linkController.getShape(connector).name(),
-     startArrow:arrows.start.name(), endArrow:arrows.end.name(),
-     labelFontFamily:linkController.getLabelFontFamily(connector), labelFontSize:linkController.getLabelFontSize(connector),
-     labelFontStyle:linkController.getLabelFontStyle(connector),
-     sourceLabel:linkController.getSourceLabel(connector), middleLabel:linkController.getMiddleLabel(connector), targetLabel:linkController.getTargetLabel(connector)],
-    geometry:[zoom:mapView.zoom, sourceAnchor:sourceAnchor, targetAnchor:targetAnchor,
-     sourceControl:[x:curve.ctrlX1-curve.x1,y:curve.ctrlY1-curve.y1],
-     targetControl:[x:curve.ctrlX2-curve.x2,y:curve.ctrlY2-curve.y2], arrowPolygons:arrowGeometry,
-     nativeSource:pointData(curve.p1), nativeTarget:pointData(curve.p2),
-     modelStartInclination:pointData(connector.startInclination), modelEndInclination:pointData(connector.endInclination),
-     strokeDash:(stroke.dashArray ?: []).toList(), strokeWidth:stroke.lineWidth, strokeCap:stroke.endCap, strokeJoin:stroke.lineJoin]]
-  }
- }
+   def pointData = { p -> p == null ? null : [x:p.x, y:p.y] }
+   nodes.each { n ->
+    org.freeplane.features.link.NodeLinks.getLinks(n).findAll { it instanceof org.freeplane.features.link.ConnectorModel }.each { connector ->
+     def source = mapView.getNodeView(connector.source)
+     def target = mapView.getNodeView(connector.target)
+     assert source && target
+     // Sample the native complete line irrespective of selection-only UI visibility.
+     // This is a temporary view field; restore it before any further capture.
+     def visibilityField = mapView.class.getDeclaredField('showConnectors'); visibilityField.accessible = true
+     def visibilityConstant = mapView.class.getDeclaredField('SHOW_CONNECTOR_LINES'); visibilityConstant.accessible = true
+     def originalVisibility = visibilityField.get(mapView)
+     def nativeView
+     try {
+      visibilityField.set(mapView, visibilityConstant.get(null))
+      nativeView = new org.freeplane.view.swing.map.link.ConnectorView(connector, source, target, mapView.background)
+     } finally { visibilityField.set(mapView, originalVisibility) }
+     def image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
+     def graphics = image.createGraphics()
+     nativeView.paint(graphics)
+     graphics.dispose()
+     def curve = fieldValue(nativeView, 'arrowLinkCurve')
+     assert curve instanceof java.awt.geom.CubicCurve2D : "Unsupported captured connector shape: ${curve?.class}"
+     def origin = { view -> SwingUtilities.convertPoint(view.content, 0, 0, mapView) }
+     def sourceOrigin = origin(source), targetOrigin = origin(target)
+     // Node artwork includes three pixels of capture padding around content.
+     def sourceAnchor = [x:curve.x1-sourceOrigin.x+3, y:curve.y1-sourceOrigin.y+3]
+     def targetAnchor = [x:curve.x2-targetOrigin.x+3, y:curve.y2-targetOrigin.y+3]
+     def arrows = linkController.getArrows(connector)
+     def arrowEnds = []
+     if (arrows.start.name() != 'NONE') arrowEnds << 'source'
+     if (arrows.end.name() != 'NONE') arrowEnds << 'target'
+     def polygons = fieldValue(nativeView, 'arrows')
+     assert polygons.size() == arrowEnds.size()
+     def arrowGeometry = polygons.withIndex().collect { polygon, index ->
+      def end = arrowEnds[index]
+      double ax = end == 'source' ? curve.x1 : curve.x2
+      double ay = end == 'source' ? curve.y1 : curve.y2
+      [end:end, points:(0..<polygon.npoints).collect { i -> [x:polygon.xpoints[i]-ax, y:polygon.ypoints[i]-ay] }]
+     }
+     def color = linkController.getColor(connector)
+     def stroke = fieldValue(nativeView, 'stroke')
+     connectorRecords << [sourceId:connector.source.ID, targetId:connector.targetID,
+                          resolved:[color:String.format('#%02x%02x%02x', color.red, color.green, color.blue),
+                                    width:linkController.getWidth(connector), alpha:linkController.getOpacity(connector),
+                                    dash:(linkController.getDashArray(connector) ?: []).toList(), shape:linkController.getShape(connector).name(),
+                                    startArrow:arrows.start.name(), endArrow:arrows.end.name(),
+                                    labelFontFamily:linkController.getLabelFontFamily(connector), labelFontSize:linkController.getLabelFontSize(connector),
+                                    labelFontStyle:linkController.getLabelFontStyle(connector),
+                                    sourceLabel:linkController.getSourceLabel(connector), middleLabel:linkController.getMiddleLabel(connector), targetLabel:linkController.getTargetLabel(connector)],
+                          geometry:[zoom:mapView.zoom, sourceAnchor:sourceAnchor, targetAnchor:targetAnchor,
+                                    sourceControl:[x:curve.ctrlX1-curve.x1,y:curve.ctrlY1-curve.y1],
+                                    targetControl:[x:curve.ctrlX2-curve.x2,y:curve.ctrlY2-curve.y2], arrowPolygons:arrowGeometry,
+                                    nativeSource:pointData(curve.p1), nativeTarget:pointData(curve.p2),
+                                    modelStartInclination:pointData(connector.startInclination), modelEndInclination:pointData(connector.endInclination),
+                                    strokeDash:(stroke.dashArray ?: []).toList(), strokeWidth:stroke.lineWidth, strokeCap:stroke.endCap, strokeJoin:stroke.lineJoin]]
+    }
+   }
 
-} finally { mapView.endPrinting() }
-def summaries = []
-records.each { record ->
- def n = nodes.find { it.ID == record.id }
- record.firstGroup = SummaryNode.isFirstGroupNode(n)
- record.summary = SummaryNode.isSummaryNode(n)
- record.alwaysUnfolded = AlwaysUnfoldedNode.isAlwaysUnfolded(n)
- record.linkHref = NodeLinks.getLinkAsString(n)
- def details = HtmlUtils.htmlToPlain(DetailModel.getDetailText(n) ?: '')
- record.searchText = [record.label, details].findAll { it }.join(' ')
- def starts = []
- n.children.eachWithIndex { child, index ->
-  if (SummaryNode.isFirstGroupNode(child)) starts << index
-  if (SummaryNode.isSummaryNode(child)) {
-   if (!starts) throw new IllegalStateException('Summary has no first-group marker')
-   int start = starts.remove(starts.size() - 1)
-   summaries << [markerId:child.ID, startMarkerId:n.children[start].ID, parentId:n.ID,
-    memberIds:n.children.subList(start + 1, index).findAll { !SummaryNode.isFirstGroupNode(it) && !SummaryNode.isSummaryNode(it) }.collect { it.ID },
-    summaryChildIds:child.children.collect { it.ID }]
+  } finally { mapView.endPrinting() }
+  def summaries = []
+  records.each { record ->
+   def n = nodes.find { it.ID == record.id }
+   record.firstGroup = SummaryNode.isFirstGroupNode(n)
+   record.summary = SummaryNode.isSummaryNode(n)
+   record.alwaysUnfolded = AlwaysUnfoldedNode.isAlwaysUnfolded(n)
+   record.linkHref = NodeLinks.getLinkAsString(n)
+   def details = HtmlUtils.htmlToPlain(DetailModel.getDetailText(n) ?: '')
+   record.searchText = [record.label, details].findAll { it }.join(' ')
+   def starts = []
+   n.children.eachWithIndex { child, index ->
+    if (SummaryNode.isFirstGroupNode(child)) starts << index
+    if (SummaryNode.isSummaryNode(child)) {
+     if (!starts) throw new IllegalStateException('Summary has no first-group marker')
+     int start = starts.remove(starts.size() - 1)
+     summaries << [markerId:child.ID, startMarkerId:n.children[start].ID, parentId:n.ID,
+                   memberIds:n.children.subList(start + 1, index).findAll { !SummaryNode.isFirstGroupNode(it) && !SummaryNode.isSummaryNode(it) }.collect { it.ID },
+                   summaryChildIds:child.children.collect { it.ID }]
+    }
+   }
   }
- }
-}
-def ids = records.collect { it.id } as Set
-if (ids.size() != records.size()) throw new IllegalStateException('Duplicate node IDs')
-if (records.any { it.parentId != null && !ids.contains(it.parentId) }) throw new IllegalStateException('Missing node parent')
-def payload = JsonOutput.toJson([nodes:records, rootId:map.rootNode.ID, links:connectorRecords, summaries:summaries])
- .replace('<', '\\u003c').replace(String.valueOf((char)0x2028), '\\u2028').replace(String.valueOf((char)0x2029), '\\u2029')
-def title = map.file?.name?.replaceFirst(/\.mm$/, '') ?: plain(map.rootNode)
-return template.replace('__MAP_TITLE__', html(title ?: 'Mind map')).replace('/*__MANIFEST__*/', payload)
+  def ids = records.collect { it.id } as Set
+  if (ids.size() != records.size()) throw new IllegalStateException('Duplicate node IDs')
+  if (records.any { it.parentId != null && !ids.contains(it.parentId) }) throw new IllegalStateException('Missing node parent')
+  def payload = JsonOutput.toJson([nodes:records, rootId:map.rootNode.ID, links:connectorRecords, summaries:summaries])
+          .replace('<', '\\u003c').replace(String.valueOf((char)0x2028), '\\u2028').replace(String.valueOf((char)0x2029), '\\u2029')
+  def title = map.file?.name?.replaceFirst(/\.mm$/, '') ?: plain(map.rootNode)
+  return template.replace('__MAP_TITLE__', html(title ?: 'Mind map')).replace('/*__MANIFEST__*/', payload)
  }
 }
 // The returned Class exposes register(File templateFile) to an in-process init script.
